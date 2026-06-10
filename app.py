@@ -6,6 +6,15 @@ from plotly.subplots import make_subplots
 from utils import load_excel, validate_columns, clean_data, load_sample_data
 
 st.set_page_config(page_title="Real Estate Comps Dashboard", page_icon="🏠", layout="wide")
+
+# Smaller metric font
+st.markdown("""
+<style>
+[data-testid="stMetricValue"] { font-size: 1.2rem; }
+[data-testid="stMetricLabel"] { font-size: 0.75rem; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🏠 Real Estate Comps Dashboard")
 st.caption("Upload comps Excel → select a metric → compare subject vs. other properties")
 
@@ -83,6 +92,11 @@ with st.sidebar:
         br_range = st.slider("Bedrooms", min_br, max_br, (min_br, max_br))
     else:
         br_range = None
+    if "BA" in comps.columns:
+        min_ba, max_ba = float(comps["BA"].min()), float(comps["BA"].max())
+        ba_range = st.slider("Bathrooms", min_ba, max_ba, (min_ba, max_ba), 0.5)
+    else:
+        ba_range = None
 
     st.divider()
     st.caption(f"📊 {len(comps)} comps loaded ({st.session_state['src']})")
@@ -97,6 +111,8 @@ if dist_cutoff is not None and "Dist" in c.columns:
     c = c[c["Dist"] <= dist_cutoff]
 if br_range is not None and "BR" in c.columns:
     c = c[(c["BR"] >= br_range[0]) & (c["BR"] <= br_range[1])]
+if ba_range is not None and "BA" in c.columns:
+    c = c[(c["BA"] >= ba_range[0]) & (c["BA"] <= ba_range[1])]
 
 comps_f = c
 
@@ -135,7 +151,6 @@ sub_val = subject.get(metric_key)
 has_sub = pd.notna(sub_val)
 
 with chart_col1:
-    # Box plot + swarm: comps distribution vs subject
     if not comps_vals.empty:
         fig = go.Figure()
         fig.add_trace(go.Box(
@@ -146,16 +161,15 @@ with chart_col1:
         if has_sub:
             fig.add_trace(go.Scatter(
                 x=[sub_val], y=["Comps"], mode="markers",
-                marker=dict(size=16, color="#FFD700", symbol="star", line=dict(width=2, color="black")),
+                marker=dict(size=12, color="#FFD700", symbol="star", line=dict(width=1.5, color="black")),
                 name="Subject", hovertemplate=f"<b>Subject</b><br>{sub_val:,.1f}<extra></extra>"
             ))
         label = metric_options.get(metric_key, metric_key)
-        fig.update_layout(title=f"{label} — Distribution", margin=dict(l=10, r=10, t=40, b=10), height=350,
-                          xaxis_title=label, showlegend=True)
+        fig.update_layout(title=f"{label} Distribution", margin=dict(l=10, r=10, t=40, b=10), height=350,
+                          xaxis_title=label, showlegend=True, font=dict(size=11))
         st.plotly_chart(fig, use_container_width=True)
 
 with chart_col2:
-    # Scatter: selected metric vs ASF
     if "ASF" in comps_f.columns and not comps_vals.empty:
         scatter_df = comps_f.dropna(subset=["ASF", metric_key])
         fig = go.Figure()
@@ -170,17 +184,40 @@ with chart_col2:
             fig.add_trace(go.Scatter(
                 x=[subject["ASF"]], y=[sub_val],
                 mode="markers",
-                marker=dict(size=18, color="#FFD700", symbol="star", line=dict(width=2, color="black")),
+                marker=dict(size=14, color="#FFD700", symbol="star", line=dict(width=1.5, color="black")),
                 name="Subject",
                 hovertemplate=f"<b>Subject</b><br>ASF: {int(subject['ASF']):,}<br>" + metric_key + f": {sub_val:,.1f}<extra></extra>"
             ))
         x_label = "ASF (sqft)"
         y_label = metric_options.get(metric_key, metric_key)
-        fig.update_layout(title=f"{y_label} vs {x_label}", height=350,
-                          xaxis_title=x_label, yaxis_title=y_label)
+        fig.update_layout(title=f"{y_label} vs ASF", height=350,
+                          xaxis_title=x_label, yaxis_title=y_label, font=dict(size=11))
         st.plotly_chart(fig, use_container_width=True)
 
-# ── Quick comparison stats ──
+# ── Column chart: property-by-property comparison ──
+st.subheader(f"📊 Property Ranking: {metric_options.get(metric_key, metric_key)}")
+if not comps_vals.empty:
+    bar_df = comps_f.dropna(subset=[metric_key]).copy()
+    bar_df = bar_df.sort_values(metric_key)
+    display_col = "Address (style code)" if "Address (style code)" in bar_df.columns else bar_df.index
+    bar_labels = bar_df[display_col].apply(lambda x: str(x)[:30])
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=bar_labels, x=bar_df[metric_key],
+        orientation="h", name="Comps",
+        marker_color=["#FFD700" if s == "Subject" else "#3498db" for s in bar_df["Status"]],
+        marker_line=dict(width=0),
+        hovertemplate="%{y}<br>" + metric_key + ": %{x:,.1f}<extra></extra>"
+    ))
+    if has_sub:
+        fig.add_vline(x=sub_val, line_width=2, line_dash="dash", line_color="#e74c3c",
+                      annotation_text=f"Subject: {sub_val:,.0f}" if abs(sub_val) >= 100 else f"Subject: {sub_val:,.2f}",
+                      annotation_position="top")
+    label = metric_options.get(metric_key, metric_key)
+    fig.update_layout(height=max(300, 25 * len(bar_df)), margin=dict(l=10, r=10, t=20, b=10),
+                      xaxis_title=label, font=dict(size=11), showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
 if not comps_vals.empty and has_sub:
     st.subheader("📈 Quick Stats")
     kcol1, kcol2, kcol3, kcol4, kcol5 = st.columns(5)
