@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from utils import load_excel, validate_columns, clean_data, load_sample_data
 
 st.set_page_config(page_title="Real Estate Comps Dashboard", page_icon="🏠", layout="wide")
@@ -180,15 +179,16 @@ with chart_col2:
     if "ASF" in comps_f.columns and not comps_vals.empty:
         scatter_df = comps_f.dropna(subset=["ASF", metric_key])
         fig = go.Figure()
-        for status_name in ["Sold", "Active", "Pending"]:
+        for status_name in sorted(scatter_df["Status"].dropna().unique()):
             sub_df = scatter_df[scatter_df["Status"] == status_name]
             if not sub_df.empty:
+                color = STATUS_COLORS.get(status_name, "#1B3A5C")
                 fig.add_trace(go.Scatter(
                     x=sub_df["ASF"], y=sub_df[metric_key],
                     mode="markers", name=status_name,
-                    marker=dict(size=10, color=STATUS_COLORS.get(status_name, "#1B3A5C"), opacity=0.85),
+                    marker=dict(size=10, color=color, opacity=0.85),
                     text=sub_df.get("Address (style code)", sub_df.index),
-                    hovertemplate="%{text}<br>ASF: %{x:,}<br>" + metric_key + ": %{y:,.1f}<extra></extra>"
+                    hovertemplate="%{text}<br>ASF: %{x:,}<br>" + metric_options.get(metric_key, metric_key) + ": %{y:,.1f}<extra></extra>"
                 ))
         if has_sub and "ASF" in subject.index and pd.notna(subject.get("ASF")):
             fig.add_trace(go.Scatter(
@@ -202,6 +202,8 @@ with chart_col2:
         y_label = metric_options.get(metric_key, metric_key)
         fig.update_layout(title=f"{y_label} vs ASF", height=350,
                           xaxis_title=x_label, yaxis_title=y_label, font=dict(size=11))
+        fig.update_xaxes(range=[0, None])
+        fig.update_yaxes(range=[0, None])
         st.plotly_chart(fig, use_container_width=True)
 
 # ── Column chart: property-by-property comparison ──
@@ -248,7 +250,7 @@ if not comps_vals.empty and has_sub:
     p_min = comps_vals.min()
     p_max = comps_vals.max()
     diff_pct = ((sub_val - median) / median * 100) if median != 0 else 0
-    rank = (comps_vals < sub_val).sum()
+    rank = (comps_vals < sub_val).sum() + 1
     total = len(comps_vals)
     label = metric_options.get(metric_key, metric_key)
     with kcol1:
