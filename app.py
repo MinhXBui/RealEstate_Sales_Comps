@@ -18,6 +18,13 @@ st.markdown("""
 st.title("🏠 Real Estate Comps Dashboard")
 st.caption("Upload comps Excel → select a metric → compare subject vs. other properties")
 
+STATUS_COLORS = {
+    "Active":  "#1B3A5C",
+    "Pending": "#2E5B88",
+    "Sold":    "#4A7FB5",
+    "Subject": "#FFD700",
+}
+
 # ── File upload ──
 uploaded = st.file_uploader("Upload comps Excel (.xlsx)", type=["xlsx"], label_visibility="collapsed")
 if uploaded:
@@ -79,9 +86,9 @@ with st.sidebar:
     sel_status = st.multiselect("Status", available_statuses, default=available_statuses)
     if "N'hood" in comps.columns:
         hoods = sorted(comps["N'hood"].dropna().unique())
-        sel_hood = st.selectbox("Neighborhood", ["All"] + hoods)
+        sel_hood = st.multiselect("Neighborhood", hoods, default=hoods)
     else:
-        sel_hood = "All"
+        sel_hood = []
     if "Dist" in comps.columns and pd.notna(comps["Dist"].max()):
         max_d = float(comps["Dist"].max())
         dist_cutoff = st.slider("Max Distance (mi)", 0.0, max_d, max_d, 0.1)
@@ -105,8 +112,8 @@ with st.sidebar:
 c = comps.copy()
 if sel_status:
     c = c[c["Status"].isin(sel_status)]
-if sel_hood != "All":
-    c = c[c["N'hood"] == sel_hood]
+if sel_hood:
+    c = c[c["N'hood"].isin(sel_hood)]
 if dist_cutoff is not None and "Dist" in c.columns:
     c = c[c["Dist"] <= dist_cutoff]
 if br_range is not None and "BR" in c.columns:
@@ -155,7 +162,7 @@ with chart_col1:
         fig = go.Figure()
         fig.add_trace(go.Box(
             x=comps_vals, name="Comps", orientation="h",
-            marker_color="#3498db", boxmean="sd",
+            marker_color="#1B3A5C", boxmean="sd",
             hovertemplate="%{x:,.1f}<extra>Comps</extra>"
         ))
         if has_sub:
@@ -173,13 +180,16 @@ with chart_col2:
     if "ASF" in comps_f.columns and not comps_vals.empty:
         scatter_df = comps_f.dropna(subset=["ASF", metric_key])
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=scatter_df["ASF"], y=scatter_df[metric_key],
-            mode="markers", name="Comps",
-            marker=dict(size=10, color="#3498db", opacity=0.7),
-            text=scatter_df.get("Address (style code)", scatter_df.index),
-            hovertemplate="%{text}<br>ASF: %{x:,}<br>" + metric_key + ": %{y:,.1f}<extra></extra>"
-        ))
+        for status_name in ["Sold", "Active", "Pending"]:
+            sub_df = scatter_df[scatter_df["Status"] == status_name]
+            if not sub_df.empty:
+                fig.add_trace(go.Scatter(
+                    x=sub_df["ASF"], y=sub_df[metric_key],
+                    mode="markers", name=status_name,
+                    marker=dict(size=10, color=STATUS_COLORS.get(status_name, "#1B3A5C"), opacity=0.85),
+                    text=sub_df.get("Address (style code)", sub_df.index),
+                    hovertemplate="%{text}<br>ASF: %{x:,}<br>" + metric_key + ": %{y:,.1f}<extra></extra>"
+                ))
         if has_sub and "ASF" in subject.index and pd.notna(subject.get("ASF")):
             fig.add_trace(go.Scatter(
                 x=[subject["ASF"]], y=[sub_val],
@@ -198,26 +208,38 @@ with chart_col2:
 st.subheader(f"📊 Property Ranking: {metric_options.get(metric_key, metric_key)}")
 if not comps_vals.empty:
     bar_df = comps_f.dropna(subset=[metric_key]).copy()
-    bar_df = bar_df.sort_values(metric_key)
+    bar_df = bar_df.sort_values(metric_key, ascending=True)
     display_col = "Address (style code)" if "Address (style code)" in bar_df.columns else bar_df.index
     bar_labels = bar_df[display_col].apply(lambda x: str(x)[:30])
 
+    bar_colors = [STATUS_COLORS.get(s, "#1B3A5C") for s in bar_df["Status"]]
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        y=bar_labels, x=bar_df[metric_key],
-        orientation="h", name="Comps",
-        marker_color=["#FFD700" if s == "Subject" else "#3498db" for s in bar_df["Status"]],
+        x=bar_labels, y=bar_df[metric_key],
+        name="Comps",
+        marker_color=bar_colors,
         marker_line=dict(width=0),
-        hovertemplate="%{y}<br>" + metric_key + ": %{x:,.1f}<extra></extra>"
+        text=bar_df[metric_key].apply(lambda v: f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}"),
+        textposition="outside",
+        textfont=dict(size=9, color="#333"),
+        hovertemplate="%{x}<br>" + metric_key + ": %{y:,.1f}<extra></extra>"
     ))
     if has_sub:
-        fig.add_vline(x=sub_val, line_width=2, line_dash="dash", line_color="#e74c3c",
+        fig.add_hline(y=sub_val, line_width=2, line_dash="dash", line_color="#e74c3c",
                       annotation_text=f"Subject: {sub_val:,.0f}" if abs(sub_val) >= 100 else f"Subject: {sub_val:,.2f}",
-                      annotation_position="top")
+                      annotation_position="right")
     label = metric_options.get(metric_key, metric_key)
-    fig.update_layout(height=max(300, 25 * len(bar_df)), margin=dict(l=10, r=10, t=20, b=10),
-                      xaxis_title=label, font=dict(size=11), showlegend=False)
+    fig.update_layout(height=max(350, 50 + len(bar_df) * 12), margin=dict(l=10, r=10, t=20, b=80 if len(bar_df) > 10 else 40),
+                      xaxis_title="", yaxis_title=label, font=dict(size=11), showlegend=False,
+                      xaxis=dict(tickfont=dict(size=10), tickangle=-45))
     st.plotly_chart(fig, use_container_width=True)
+
+    legend_html = "".join(
+        f'<span style="display:inline-block;width:12px;height:12px;background:{c};border-radius:2px;margin-right:4px;vertical-align:middle"></span>{s}&nbsp;&nbsp;'
+        for s, c in STATUS_COLORS.items() if s != "Subject"
+    )
+    st.markdown(legend_html, unsafe_allow_html=True)
 if not comps_vals.empty and has_sub:
     st.subheader("📈 Quick Stats")
     kcol1, kcol2, kcol3, kcol4, kcol5 = st.columns(5)
@@ -230,15 +252,15 @@ if not comps_vals.empty and has_sub:
     total = len(comps_vals)
     label = metric_options.get(metric_key, metric_key)
     with kcol1:
-        st.metric(f"Subject {label}", f"{sub_val:,.1f}")
+        st.metric(f"Subject {label}", f"{sub_val:,.2f}")
     with kcol2:
-        st.metric(f"Comps Median", f"{median:,.1f}", delta=f"{diff_pct:+.1f}% vs subject")
+        st.metric(f"Comps Median", f"{median:,.2f}", delta=f"{diff_pct:+.2f}% vs subject")
     with kcol3:
-        st.metric("Comps Range", f"{p_min:,.1f} — {p_max:,.1f}")
+        st.metric("Comps Range", f"{p_min:,.2f} — {p_max:,.2f}")
     with kcol4:
-        st.metric("Comps Mean ± SD", f"{mean:,.1f} ± {comps_vals.std():,.1f}")
+        st.metric("Comps Mean ± SD", f"{mean:,.2f} ± {comps_vals.std():,.2f}")
     with kcol5:
-        st.metric("Subject Rank", f"#{rank} of {total}", delta=f"top {rank/total*100:.0f}%" if total > 0 else None)
+        st.metric("Subject Rank", f"#{rank} of {total}", delta=f"top {rank/total*100:.2f}%" if total > 0 else None)
 
 # ── Data table ──
 st.divider()
